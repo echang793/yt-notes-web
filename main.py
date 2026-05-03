@@ -215,6 +215,17 @@ def api_tickers():
     return db.get_ticker_tally()
 
 
+@app.get("/api/debug/env")
+def api_debug_env():
+    return {
+        "STRIPE_SECRET_KEY":     "set" if os.environ.get("STRIPE_SECRET_KEY") else "missing",
+        "STRIPE_BASIC_PRICE_ID": os.environ.get("STRIPE_BASIC_PRICE_ID", "missing"),
+        "STRIPE_PRO_PRICE_ID":   os.environ.get("STRIPE_PRO_PRICE_ID", "missing"),
+        "STRIPE_WEBHOOK_SECRET": "set" if os.environ.get("STRIPE_WEBHOOK_SECRET") else "missing",
+        "GROQ_API_KEY":          "set" if os.environ.get("GROQ_API_KEY") else "missing",
+    }
+
+
 # ── Payments ──────────────────────────────────────────────────────────
 
 class CheckoutRequest(BaseModel):
