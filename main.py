@@ -18,7 +18,7 @@ import db
 import payments
 import summarizer
 
-app = FastAPI(title="YT Notes")
+app = FastAPI(title="Nutshell")
 
 STATIC_DIR  = Path(__file__).parent / "static"
 CONFIG_PATH = Path.home() / ".yt-notes.json"
