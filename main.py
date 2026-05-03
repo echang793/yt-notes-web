@@ -229,7 +229,7 @@ def api_checkout(req: CheckoutRequest, request: Request):
     cancel_url  = f"{base_url}/"
     try:
         url = payments.create_checkout_session(user, req.plan, success_url, cancel_url)
-    except ValueError as e:
+    except Exception as e:
         raise HTTPException(400, str(e))
     return {"url": url}
 
