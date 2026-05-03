@@ -6,11 +6,6 @@ import os
 
 import db
 
-STRIPE_SECRET_KEY     = os.environ.get("STRIPE_SECRET_KEY", "")
-STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
-STRIPE_BASIC_PRICE_ID = os.environ.get("STRIPE_BASIC_PRICE_ID", "")  # $19/mo
-STRIPE_PRO_PRICE_ID   = os.environ.get("STRIPE_PRO_PRICE_ID", "")    # $49/mo
-
 PLAN_LIMITS = {
     "free":  5,    # lifetime summaries
     "basic": 200,  # per month
@@ -20,14 +15,16 @@ PLAN_LIMITS = {
 
 def _stripe():
     import stripe as s
-    s.api_key = STRIPE_SECRET_KEY
+    s.api_key = os.environ.get("STRIPE_SECRET_KEY", "")
     return s
 
 
 def create_checkout_session(user: dict, plan: str, success_url: str, cancel_url: str) -> str:
     """Return Stripe Checkout URL for the given plan."""
-    s = _stripe()
-    price_id = STRIPE_BASIC_PRICE_ID if plan == "basic" else STRIPE_PRO_PRICE_ID
+    s        = _stripe()
+    basic_id = os.environ.get("STRIPE_BASIC_PRICE_ID", "")
+    pro_id   = os.environ.get("STRIPE_PRO_PRICE_ID", "")
+    price_id = basic_id if plan == "basic" else pro_id
     if not price_id:
         raise ValueError(f"Price ID for plan '{plan}' not configured.")
 
@@ -64,7 +61,7 @@ def handle_webhook(payload: bytes, sig_header: str) -> None:
     """Process a Stripe webhook event and update the DB accordingly."""
     s = _stripe()
     try:
-        event = s.Webhook.construct_event(payload, sig_header, STRIPE_WEBHOOK_SECRET)
+        event = s.Webhook.construct_event(payload, sig_header, os.environ.get("STRIPE_WEBHOOK_SECRET", ""))
     except s.error.SignatureVerificationError:
         raise ValueError("Invalid Stripe webhook signature.")
 
@@ -90,9 +87,9 @@ def _sync_subscription(sub: dict) -> None:
         return
     # Determine plan from price ID
     price_id = sub["items"]["data"][0]["price"]["id"] if sub["items"]["data"] else ""
-    if price_id == STRIPE_PRO_PRICE_ID:
+    if price_id == os.environ.get("STRIPE_PRO_PRICE_ID", ""):
         plan = "pro"
-    elif price_id == STRIPE_BASIC_PRICE_ID:
+    elif price_id == os.environ.get("STRIPE_BASIC_PRICE_ID", ""):
         plan = "basic"
     else:
         plan = "free"
