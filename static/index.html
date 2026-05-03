@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>YT Notes — Trading Video Summarizer</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    body { background: #0f1117; color: #e2e8f0; }
+    .prose h2 { color: #38bdf8; font-size: 1.1rem; font-weight: 700; margin: 1.2rem 0 0.4rem; border-bottom: 1px solid #1e293b; padding-bottom: 0.2rem; }
+    .prose ul { list-style: disc; padding-left: 1.5rem; }
+    .prose li { margin: 0.25rem 0; }
+    .prose strong { color: #f0f9ff; }
+    .prose p { margin: 0.4rem 0; line-height: 1.6; }
+    .tag-bull { background:#14532d; color:#86efac; }
+    .tag-bear { background:#450a0a; color:#fca5a5; }
+    .tag-neut { background:#1e293b; color:#94a3b8; }
+    #spinner { display:none; }
+    #spinner.active { display:flex; }
+    .modal-bg { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:50; align-items:center; justify-content:center; }
+    .modal-bg.open { display:flex; }
+  </style>
+</head>
+<body class="min-h-screen font-mono">
+
+  <!-- Header -->
+  <header class="border-b border-slate-800 px-6 py-4 flex items-center justify-between">
+    <div>
+      <h1 class="text-lg font-bold text-sky-400">YT Notes</h1>
+      <p class="text-xs text-slate-500">Trading video summarizer</p>
+    </div>
+    <nav class="flex items-center gap-4 text-sm">
+      <button onclick="showTab('summarize')" id="tab-summarize"
+        class="tab-btn text-sky-400 border-b border-sky-400 pb-1">Summarize</button>
+      <button onclick="showTab('history')" id="tab-history"
+        class="tab-btn text-slate-500 hover:text-slate-300 pb-1">History</button>
+      <button onclick="showTab('tickers')" id="tab-tickers"
+        class="tab-btn text-slate-500 hover:text-slate-300 pb-1">Tickers</button>
+      <button onclick="showTab('watchlist')" id="tab-watchlist"
+        class="tab-btn text-slate-500 hover:text-slate-300 pb-1 hidden">Watchlist</button>
+      <!-- Auth buttons -->
+      <div id="auth-logged-out" class="flex gap-2">
+        <button onclick="openModal('login-modal')"
+          class="text-slate-400 hover:text-slate-200 pb-1">Log in</button>
+        <button onclick="openModal('register-modal')"
+          class="bg-sky-600 hover:bg-sky-500 text-white px-3 py-1 rounded-lg text-sm">Sign up</button>
+      </div>
+      <div id="auth-logged-in" class="hidden flex items-center gap-3">
+        <span id="plan-badge" class="text-xs px-2 py-0.5 rounded bg-slate-700 text-slate-300"></span>
+        <button onclick="showTab('account')" id="tab-account"
+          class="tab-btn text-slate-500 hover:text-slate-300 pb-1">Account</button>
+        <button onclick="doLogout()"
+          class="text-slate-500 hover:text-slate-300 text-xs">Sign out</button>
+      </div>
+    </nav>
+  </header>
+
+  <main class="max-w-4xl mx-auto px-4 py-8">
+
+    <!-- ── SUMMARIZE TAB ── -->
+    <div id="tab-summarize-content">
+      <div class="bg-slate-900 border border-slate-700 rounded-xl p-6 mb-6">
+        <label class="block text-sm text-slate-400 mb-2">YouTube URL</label>
+        <input id="url-input" type="text"
+          placeholder="https://www.youtube.com/watch?v=..."
+          class="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-3 text-sm
+                 focus:outline-none focus:border-sky-500 placeholder-slate-600 mb-4" />
+
+        <div class="flex items-center gap-4">
+          <button onclick="doSummarize(false)"
+            class="bg-sky-600 hover:bg-sky-500 text-white px-5 py-2 rounded-lg text-sm font-medium transition">
+            Full Notes
+          </button>
+          <button onclick="doSummarize(true)"
+            class="bg-slate-700 hover:bg-slate-600 text-white px-5 py-2 rounded-lg text-sm font-medium transition">
+            Brief TL;DR
+          </button>
+          <span id="word-count" class="text-xs text-slate-500 ml-auto hidden"></span>
+        </div>
+
+        <!-- Usage bar for logged-in users -->
+        <div id="usage-bar-wrap" class="mt-4 hidden">
+          <div class="flex justify-between text-xs text-slate-500 mb-1">
+            <span id="usage-label">Usage</span>
+            <span id="usage-fraction"></span>
+          </div>
+          <div class="bg-slate-800 rounded-full h-1.5">
+            <div id="usage-fill" class="bg-sky-500 h-1.5 rounded-full transition-all" style="width:0%"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Spinner -->
+      <div id="spinner" class="items-center gap-3 text-slate-400 text-sm mb-6 hidden">
+        <svg class="animate-spin h-5 w-5 text-sky-500" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+        </svg>
+        <span id="spinner-msg">Fetching transcript...</span>
+      </div>
+
+      <!-- Error -->
+      <div id="error-box" class="hidden bg-red-950 border border-red-800 text-red-300
+                                  rounded-lg px-4 py-3 text-sm mb-6"></div>
+
+      <!-- Upgrade nudge -->
+      <div id="upgrade-box" class="hidden bg-sky-950 border border-sky-700 text-sky-300
+                                    rounded-lg px-4 py-3 text-sm mb-6 flex items-center justify-between">
+        <span id="upgrade-msg"></span>
+        <button onclick="openModal('upgrade-modal')"
+          class="ml-4 bg-sky-600 hover:bg-sky-500 text-white px-3 py-1 rounded-lg text-xs shrink-0">
+          Upgrade
+        </button>
+      </div>
+
+      <!-- Results -->
+      <div id="result-box" class="hidden">
+        <div id="ticker-tags" class="flex flex-wrap gap-2 mb-4"></div>
+        <div class="bg-slate-900 border border-slate-700 rounded-xl p-6">
+          <div id="notes-content" class="prose text-sm text-slate-300"></div>
+        </div>
+        <p class="text-xs text-slate-600 mt-2" id="result-meta"></p>
+      </div>
+    </div>
+
+    <!-- ── HISTORY TAB ── -->
+    <div id="tab-history-content" class="hidden">
+      <div id="history-list" class="space-y-3"></div>
+    </div>
+
+    <!-- ── TICKERS TAB ── -->
+    <div id="tab-tickers-content" class="hidden">
+      <div class="bg-slate-900 border border-slate-700 rounded-xl overflow-hidden">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="border-b border-slate-700 text-slate-500 text-xs uppercase">
+              <th class="text-left px-4 py-3">Ticker</th>
+              <th class="text-right px-4 py-3">Mentions</th>
+              <th class="text-right px-4 py-3 text-green-500">Bull</th>
+              <th class="text-right px-4 py-3 text-red-500">Bear</th>
+              <th class="text-right px-4 py-3 text-slate-500">Neut</th>
+            </tr>
+          </thead>
+          <tbody id="tickers-table"></tbody>
+        </table>
+        <p id="tickers-empty" class="text-slate-600 text-sm px-4 py-6 hidden">
+          No ticker data yet — summarize some videos first.
+        </p>
+      </div>
+    </div>
+
+    <!-- ── WATCHLIST TAB ── -->
+    <div id="tab-watchlist-content" class="hidden">
+      <div class="bg-slate-900 border border-slate-700 rounded-xl p-6 mb-4">
+        <p class="text-sm text-slate-400 mb-3">
+          Get email alerts when a tracked ticker is mentioned in a new video summary.
+        </p>
+        <div class="flex gap-2">
+          <input id="watchlist-input" type="text" placeholder="AAPL"
+            class="bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm
+                   focus:outline-none focus:border-sky-500 placeholder-slate-600 w-32 uppercase" />
+          <button onclick="addTicker()"
+            class="bg-sky-600 hover:bg-sky-500 text-white px-4 py-2 rounded-lg text-sm">
+            Add
+          </button>
+        </div>
+      </div>
+      <div id="watchlist-tags" class="flex flex-wrap gap-2"></div>
+      <p id="watchlist-empty" class="text-slate-600 text-sm hidden">
+        No tickers on your watchlist yet.
+      </p>
+    </div>
+
+    <!-- ── ACCOUNT TAB ── -->
+    <div id="tab-account-content" class="hidden">
+      <div class="bg-slate-900 border border-slate-700 rounded-xl p-6 mb-4">
+        <h2 class="text-sky-400 font-bold mb-4">Account</h2>
+        <div class="space-y-2 text-sm">
+          <div class="flex justify-between">
+            <span class="text-slate-500">Email</span>
+            <span id="account-email" class="text-slate-200"></span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-slate-500">Plan</span>
+            <span id="account-plan" class="text-slate-200 capitalize"></span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-slate-500">Total summaries</span>
+            <span id="account-total" class="text-slate-200"></span>
+          </div>
+          <div class="flex justify-between" id="account-monthly-row">
+            <span class="text-slate-500">This month</span>
+            <span id="account-monthly" class="text-slate-200"></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Plan cards -->
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
+        <!-- Free -->
+        <div class="bg-slate-900 border border-slate-700 rounded-xl p-5">
+          <h3 class="font-bold text-slate-200 mb-1">Free</h3>
+          <p class="text-2xl font-bold text-white mb-3">$0</p>
+          <ul class="text-xs text-slate-400 space-y-1 mb-4">
+            <li>5 lifetime summaries</li>
+            <li>Full notes + TL;DR</li>
+            <li>Ticker extraction</li>
+          </ul>
+          <span id="free-badge" class="hidden text-xs text-slate-500">Current plan</span>
+        </div>
+        <!-- Basic -->
+        <div class="bg-slate-900 border border-sky-800 rounded-xl p-5">
+          <h3 class="font-bold text-sky-300 mb-1">Basic</h3>
+          <p class="text-2xl font-bold text-white mb-3">$19<span class="text-sm font-normal text-slate-400">/mo</span></p>
+          <ul class="text-xs text-slate-400 space-y-1 mb-4">
+            <li>200 summaries / month</li>
+            <li>Full notes + TL;DR</li>
+            <li>Ticker extraction</li>
+            <li>Personal history</li>
+          </ul>
+          <button id="basic-btn" onclick="checkout('basic')"
+            class="w-full bg-sky-600 hover:bg-sky-500 text-white py-1.5 rounded-lg text-xs">
+            Upgrade to Basic
+          </button>
+          <span id="basic-badge" class="hidden text-xs text-slate-500">Current plan</span>
+        </div>
+        <!-- Pro -->
+        <div class="bg-slate-900 border border-violet-800 rounded-xl p-5">
+          <h3 class="font-bold text-violet-300 mb-1">Pro</h3>
+          <p class="text-2xl font-bold text-white mb-3">$49<span class="text-sm font-normal text-slate-400">/mo</span></p>
+          <ul class="text-xs text-slate-400 space-y-1 mb-4">
+            <li>Unlimited summaries</li>
+            <li>Full notes + TL;DR</li>
+            <li>Ticker extraction</li>
+            <li>Personal history</li>
+            <li>Watchlist email alerts</li>
+          </ul>
+          <button id="pro-btn" onclick="checkout('pro')"
+            class="w-full bg-violet-600 hover:bg-violet-500 text-white py-1.5 rounded-lg text-xs">
+            Upgrade to Pro
+          </button>
+          <span id="pro-badge" class="hidden text-xs text-slate-500">Current plan</span>
+        </div>
+      </div>
+
+      <!-- Manage billing -->
+      <button id="billing-btn" onclick="managePortal()"
+        class="hidden text-sm text-sky-400 hover:text-sky-300">
+        Manage billing &rarr;
+      </button>
+    </div>
+
+  </main>
+
+  <!-- ── LOGIN MODAL ── -->
+  <div id="login-modal" class="modal-bg" onclick="closeModalOutside(event,'login-modal')">
+    <div class="bg-slate-900 border border-slate-700 rounded-xl p-6 w-full max-w-sm mx-4">
+      <h2 class="text-sky-400 font-bold mb-4">Log in</h2>
+      <div id="login-error" class="hidden text-red-400 text-xs mb-3"></div>
+      <label class="block text-xs text-slate-500 mb-1">Email</label>
+      <input id="login-email" type="email" autocomplete="email"
+        class="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm mb-3
+               focus:outline-none focus:border-sky-500" />
+      <label class="block text-xs text-slate-500 mb-1">Password</label>
+      <input id="login-password" type="password" autocomplete="current-password"
+        class="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm mb-4
+               focus:outline-none focus:border-sky-500" />
+      <button onclick="doLogin()"
+        class="w-full bg-sky-600 hover:bg-sky-500 text-white py-2 rounded-lg text-sm">
+        Log in
+      </button>
+      <p class="text-xs text-slate-500 mt-3 text-center">
+        No account?
+        <button onclick="switchModal('login-modal','register-modal')"
+          class="text-sky-400 hover:text-sky-300">Sign up</button>
+      </p>
+    </div>
+  </div>
+
+  <!-- ── REGISTER MODAL ── -->
+  <div id="register-modal" class="modal-bg" onclick="closeModalOutside(event,'register-modal')">
+    <div class="bg-slate-900 border border-slate-700 rounded-xl p-6 w-full max-w-sm mx-4">
+      <h2 class="text-sky-400 font-bold mb-4">Create account</h2>
+      <div id="register-error" class="hidden text-red-400 text-xs mb-3"></div>
+      <label class="block text-xs text-slate-500 mb-1">Email</label>
+      <input id="register-email" type="email" autocomplete="email"
+        class="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm mb-3
+               focus:outline-none focus:border-sky-500" />
+      <label class="block text-xs text-slate-500 mb-1">Password <span class="text-slate-600">(min 8 chars)</span></label>
+      <input id="register-password" type="password" autocomplete="new-password"
+        class="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm mb-4
+               focus:outline-none focus:border-sky-500" />
+      <button onclick="doRegister()"
+        class="w-full bg-sky-600 hover:bg-sky-500 text-white py-2 rounded-lg text-sm">
+        Create account
+      </button>
+      <p class="text-xs text-slate-500 mt-3 text-center">
+        Already have an account?
+        <button onclick="switchModal('register-modal','login-modal')"
+          class="text-sky-400 hover:text-sky-300">Log in</button>
+      </p>
+    </div>
+  </div>
+
+  <!-- ── UPGRADE MODAL ── -->
+  <div id="upgrade-modal" class="modal-bg" onclick="closeModalOutside(event,'upgrade-modal')">
+    <div class="bg-slate-900 border border-slate-700 rounded-xl p-6 w-full max-w-sm mx-4">
+      <h2 class="text-sky-400 font-bold mb-2">Upgrade your plan</h2>
+      <p class="text-xs text-slate-400 mb-4">You've reached your current plan limit.</p>
+      <div class="space-y-3">
+        <button onclick="checkout('basic')"
+          class="w-full bg-sky-600 hover:bg-sky-500 text-white py-2 rounded-lg text-sm">
+          Basic — $19/mo &nbsp;·&nbsp; 200 summaries/month
+        </button>
+        <button onclick="checkout('pro')"
+          class="w-full bg-violet-600 hover:bg-violet-500 text-white py-2 rounded-lg text-sm">
+          Pro — $49/mo &nbsp;·&nbsp; Unlimited + watchlist alerts
+        </button>
+      </div>
+      <button onclick="closeModal('upgrade-modal')"
+        class="w-full mt-3 text-slate-500 hover:text-slate-300 text-xs py-1">
+        Not now
+      </button>
+    </div>
+  </div>
+
+<script>
+const API = '';
+let _user = null;
+
+// ── Bootstrap ─────────────────────────────────────────────────────────
+async function init() {
+  try {
+    const res  = await fetch(`${API}/api/auth/me`);
+    const data = await res.json();
+    if (data.user) setUser(data.user);
+  } catch(_) {}
+
+  // Deep-link to a summary
+  const params = new URLSearchParams(location.search);
+  if (params.has('summary')) {
+    const data = await fetch(`${API}/api/summaries/${params.get('summary')}`).then(r => r.json()).catch(() => null);
+    if (data) { showResult(data); document.getElementById('url-input').value = data.url; }
+  }
+  // Stripe checkout success
+  if (params.get('checkout') === 'success') {
+    history.replaceState({}, '', '/');
+    const res  = await fetch(`${API}/api/auth/me`);
+    const data = await res.json();
+    if (data.user) setUser(data.user);
+    showTab('account');
+  }
+}
+
+function setUser(user) {
+  _user = user;
+  document.getElementById('auth-logged-out').classList.add('hidden');
+  document.getElementById('auth-logged-in').classList.remove('hidden');
+  const plans = {free:'Free', basic:'Basic', pro:'Pro'};
+  document.getElementById('plan-badge').textContent = plans[user.plan] || user.plan;
+  // Show watchlist tab only for pro
+  document.getElementById('tab-watchlist').classList.toggle('hidden', user.plan !== 'pro');
+  updateUsageBar(user);
+}
+
+function clearUser() {
+  _user = null;
+  document.getElementById('auth-logged-out').classList.remove('hidden');
+  document.getElementById('auth-logged-in').classList.add('hidden');
+  document.getElementById('tab-watchlist').classList.add('hidden');
+  document.getElementById('usage-bar-wrap').classList.add('hidden');
+}
+
+function updateUsageBar(user) {
+  const wrap = document.getElementById('usage-bar-wrap');
+  if (!user || user.plan === 'pro') { wrap.classList.add('hidden'); return; }
+  const limit = user.plan === 'basic' ? 200 : 5;
+  const count = user.plan === 'basic' ? user.monthly_count : user.summary_count;
+  wrap.classList.remove('hidden');
+  document.getElementById('usage-label').textContent =
+    user.plan === 'basic' ? 'Monthly summaries' : 'Lifetime summaries';
+  document.getElementById('usage-fraction').textContent = `${count} / ${limit}`;
+  document.getElementById('usage-fill').style.width = `${Math.min(100, count / limit * 100)}%`;
+}
+
+// ── Tab switching ─────────────────────────────────────────────────────
+function showTab(name) {
+  ['summarize','history','tickers','watchlist','account'].forEach(t => {
+    const content = document.getElementById(`tab-${t}-content`);
+    if (content) content.classList.add('hidden');
+    const btn = document.getElementById(`tab-${t}`);
+    if (btn) {
+      btn.classList.remove('text-sky-400','border-b','border-sky-400');
+      btn.classList.add('text-slate-500');
+    }
+  });
+  document.getElementById(`tab-${name}-content`).classList.remove('hidden');
+  const active = document.getElementById(`tab-${name}`);
+  if (active) {
+    active.classList.remove('text-slate-500');
+    active.classList.add('text-sky-400','border-b','border-sky-400');
+  }
+  if (name === 'history')   loadHistory();
+  if (name === 'tickers')   loadTickers();
+  if (name === 'watchlist') loadWatchlist();
+  if (name === 'account')   renderAccount();
+}
+
+// ── Summarize ─────────────────────────────────────────────────────────
+async function doSummarize(brief) {
+  const url = document.getElementById('url-input').value.trim();
+  if (!url) return;
+
+  setSpinner(true, brief ? 'Generating brief summary...' : 'Fetching transcript...');
+  hideError();
+  document.getElementById('result-box').classList.add('hidden');
+  document.getElementById('upgrade-box').classList.add('hidden');
+
+  try {
+    const res  = await fetch(`${API}/api/summarize`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({url, brief}),
+    });
+    const data = await res.json();
+    if (res.status === 402) {
+      showUpgrade(data.detail || 'Limit reached. Upgrade to continue.');
+      return;
+    }
+    if (!res.ok) throw new Error(data.detail || 'Unknown error');
+    showResult(data);
+    // Refresh user usage counts
+    if (_user) {
+      const me = await fetch(`${API}/api/auth/me`).then(r => r.json());
+      if (me.user) { _user = me.user; updateUsageBar(_user); }
+    }
+  } catch(e) {
+    showError(e.message);
+  } finally {
+    setSpinner(false);
+  }
+}
+
+function showResult(data) {
+  const tags = document.getElementById('ticker-tags');
+  tags.innerHTML = '';
+  const seen = new Set();
+  (data.tickers || []).forEach(t => {
+    if (seen.has(t.ticker)) return;
+    seen.add(t.ticker);
+    const cls = t.sentiment === 'bullish' ? 'tag-bull' :
+                t.sentiment === 'bearish' ? 'tag-bear' : 'tag-neut';
+    const watchBtn = (_user && _user.plan === 'pro')
+      ? `<button onclick="addTickerDirect('${t.ticker}')" class="ml-1 opacity-50 hover:opacity-100 text-xs">+</button>`
+      : '';
+    tags.innerHTML += `<span class="px-2 py-0.5 rounded text-xs font-mono ${cls}">
+      $${t.ticker} <span class="opacity-60">${t.sentiment}</span>${watchBtn}
+    </span>`;
+  });
+
+  document.getElementById('notes-content').innerHTML = marked.parse(data.notes || '');
+  document.getElementById('result-meta').textContent =
+    `${data.word_count?.toLocaleString()} words · ${data.cached ? 'cached transcript' : 'fresh transcript'} · ID: ${data.id}`;
+  document.getElementById('result-box').classList.remove('hidden');
+}
+
+// ── History ───────────────────────────────────────────────────────────
+async function loadHistory() {
+  const list = document.getElementById('history-list');
+  list.innerHTML = '<p class="text-slate-600 text-sm">Loading...</p>';
+  try {
+    const rows = await fetch(`${API}/api/history`).then(r => r.json());
+    if (!rows.length) {
+      list.innerHTML = '<p class="text-slate-600 text-sm">No summaries yet.</p>';
+      return;
+    }
+    list.innerHTML = rows.map(r => {
+      const thesis = extractThesis(r.notes);
+      const date   = r.created_at.slice(0,16).replace('T',' ');
+      return `
+        <div class="bg-slate-900 border border-slate-700 rounded-xl p-4 cursor-pointer
+                    hover:border-sky-700 transition"
+             onclick="loadSummary('${r.id}')">
+          <div class="flex items-start justify-between gap-4">
+            <div>
+              <p class="text-xs text-slate-500 mb-1">${date} · ${r.brief ? 'brief' : 'full'} · ${r.word_count?.toLocaleString()} words</p>
+              <p class="text-sm text-slate-200">${thesis}</p>
+              <p class="text-xs text-slate-600 mt-1 truncate max-w-lg">${r.url}</p>
+            </div>
+            <span class="text-xs text-slate-600 shrink-0">${r.id}</span>
+          </div>
+        </div>`;
+    }).join('');
+  } catch(e) {
+    list.innerHTML = `<p class="text-red-400 text-sm">${e.message}</p>`;
+  }
+}
+
+async function loadSummary(id) {
+  const data = await fetch(`${API}/api/summaries/${id}`).then(r => r.json());
+  document.getElementById('url-input').value = data.url;
+  showResult(data);
+  showTab('summarize');
+}
+
+// ── Tickers ───────────────────────────────────────────────────────────
+async function loadTickers() {
+  const tbody = document.getElementById('tickers-table');
+  const empty = document.getElementById('tickers-empty');
+  tbody.innerHTML = '';
+  try {
+    const rows = await fetch(`${API}/api/tickers`).then(r => r.json());
+    if (!rows.length) { empty.classList.remove('hidden'); return; }
+    empty.classList.add('hidden');
+    tbody.innerHTML = rows.map(r => `
+      <tr class="border-b border-slate-800 hover:bg-slate-800 transition">
+        <td class="px-4 py-2 font-mono font-bold text-sky-300">$${r.ticker}</td>
+        <td class="px-4 py-2 text-right text-slate-300">${r.count}</td>
+        <td class="px-4 py-2 text-right text-green-400">${r.bullish || '—'}</td>
+        <td class="px-4 py-2 text-right text-red-400">${r.bearish || '—'}</td>
+        <td class="px-4 py-2 text-right text-slate-500">${r.neutral || '—'}</td>
+      </tr>`).join('');
+  } catch(e) {
+    tbody.innerHTML = `<tr><td colspan="5" class="px-4 py-4 text-red-400 text-sm">${e.message}</td></tr>`;
+  }
+}
+
+// ── Watchlist ─────────────────────────────────────────────────────────
+let _watchlist = [];
+
+async function loadWatchlist() {
+  const container = document.getElementById('watchlist-tags');
+  const empty     = document.getElementById('watchlist-empty');
+  try {
+    const data = await fetch(`${API}/api/watchlist`).then(r => r.json());
+    _watchlist = data.tickers || [];
+    renderWatchlistTags();
+  } catch(e) {
+    container.innerHTML = `<p class="text-red-400 text-sm">${e.message}</p>`;
+  }
+}
+
+function renderWatchlistTags() {
+  const container = document.getElementById('watchlist-tags');
+  const empty     = document.getElementById('watchlist-empty');
+  if (!_watchlist.length) {
+    empty.classList.remove('hidden');
+    container.innerHTML = '';
+    return;
+  }
+  empty.classList.add('hidden');
+  container.innerHTML = _watchlist.map(t => `
+    <span class="flex items-center gap-1 px-2 py-1 rounded bg-slate-800 text-sky-300 text-xs font-mono">
+      $${t}
+      <button onclick="removeTicker('${t}')" class="text-slate-500 hover:text-red-400 ml-1">&times;</button>
+    </span>`).join('');
+}
+
+async function addTicker() {
+  const input  = document.getElementById('watchlist-input');
+  const ticker = input.value.trim().toUpperCase();
+  if (!ticker) return;
+  input.value = '';
+  await addTickerDirect(ticker);
+}
+
+async function addTickerDirect(ticker) {
+  try {
+    const data = await fetch(`${API}/api/watchlist`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ticker}),
+    }).then(r => r.json());
+    _watchlist = data.tickers || [];
+    renderWatchlistTags();
+  } catch(e) {
+    alert(e.message);
+  }
+}
+
+async function removeTicker(ticker) {
+  try {
+    const data = await fetch(`${API}/api/watchlist/${ticker}`, {method:'DELETE'}).then(r => r.json());
+    _watchlist = data.tickers || [];
+    renderWatchlistTags();
+  } catch(e) {
+    alert(e.message);
+  }
+}
+
+// ── Account ───────────────────────────────────────────────────────────
+function renderAccount() {
+  if (!_user) { showTab('summarize'); openModal('login-modal'); return; }
+  document.getElementById('account-email').textContent   = _user.email;
+  document.getElementById('account-plan').textContent    = _user.plan;
+  document.getElementById('account-total').textContent   = _user.summary_count;
+  document.getElementById('account-monthly').textContent = _user.monthly_count;
+
+  const monthlyRow = document.getElementById('account-monthly-row');
+  monthlyRow.classList.toggle('hidden', _user.plan === 'free');
+
+  // Plan badges / buttons
+  ['free','basic','pro'].forEach(p => {
+    const badge = document.getElementById(`${p}-badge`);
+    const btn   = document.getElementById(`${p}-btn`);
+    if (_user.plan === p) {
+      if (badge) badge.classList.remove('hidden');
+      if (btn)   btn.classList.add('hidden');
+    } else {
+      if (badge) badge.classList.add('hidden');
+      if (btn)   btn.classList.remove('hidden');
+    }
+  });
+
+  const billingBtn = document.getElementById('billing-btn');
+  billingBtn.classList.toggle('hidden', _user.plan === 'free');
+}
+
+async function checkout(plan) {
+  if (!_user) { openModal('login-modal'); return; }
+  closeModal('upgrade-modal');
+  try {
+    const data = await fetch(`${API}/api/payments/checkout`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({plan}),
+    }).then(r => r.json());
+    if (data.url) location.href = data.url;
+  } catch(e) {
+    alert(e.message);
+  }
+}
+
+async function managePortal() {
+  try {
+    const data = await fetch(`${API}/api/payments/portal`, {method:'POST'}).then(r => r.json());
+    if (data.url) location.href = data.url;
+  } catch(e) {
+    alert(e.message);
+  }
+}
+
+// ── Auth ──────────────────────────────────────────────────────────────
+async function doRegister() {
+  const email    = document.getElementById('register-email').value.trim();
+  const password = document.getElementById('register-password').value;
+  const errEl    = document.getElementById('register-error');
+  errEl.classList.add('hidden');
+  try {
+    const res  = await fetch(`${API}/api/auth/register`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({email, password}),
+    });
+    const data = await res.json();
+    if (!res.ok) { errEl.textContent = data.detail; errEl.classList.remove('hidden'); return; }
+    setUser(data);
+    closeModal('register-modal');
+  } catch(e) {
+    errEl.textContent = e.message; errEl.classList.remove('hidden');
+  }
+}
+
+async function doLogin() {
+  const email    = document.getElementById('login-email').value.trim();
+  const password = document.getElementById('login-password').value;
+  const errEl    = document.getElementById('login-error');
+  errEl.classList.add('hidden');
+  try {
+    const res  = await fetch(`${API}/api/auth/login`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({email, password}),
+    });
+    const data = await res.json();
+    if (!res.ok) { errEl.textContent = data.detail; errEl.classList.remove('hidden'); return; }
+    setUser(data);
+    closeModal('login-modal');
+  } catch(e) {
+    errEl.textContent = e.message; errEl.classList.remove('hidden');
+  }
+}
+
+async function doLogout() {
+  await fetch(`${API}/api/auth/logout`, {method:'POST'});
+  clearUser();
+  showTab('summarize');
+}
+
+// ── Modals ────────────────────────────────────────────────────────────
+function openModal(id) {
+  document.getElementById(id).classList.add('open');
+}
+function closeModal(id) {
+  document.getElementById(id).classList.remove('open');
+}
+function closeModalOutside(e, id) {
+  if (e.target === document.getElementById(id)) closeModal(id);
+}
+function switchModal(from, to) {
+  closeModal(from);
+  openModal(to);
+}
+
+// ── Utilities ─────────────────────────────────────────────────────────
+function extractThesis(notes) {
+  const m = notes?.match(/## Thesis\s*\n+(.+)/);
+  const t = m ? m[1].trim() : '—';
+  return t.length > 100 ? t.slice(0,100) + '…' : t;
+}
+
+function setSpinner(on, msg = '') {
+  const el = document.getElementById('spinner');
+  el.classList.toggle('hidden', !on);
+  el.classList.toggle('active', on);
+  if (msg) document.getElementById('spinner-msg').textContent = msg;
+}
+
+function showError(msg) {
+  const el = document.getElementById('error-box');
+  el.textContent = msg;
+  el.classList.remove('hidden');
+}
+
+function hideError() {
+  document.getElementById('error-box').classList.add('hidden');
+}
+
+function showUpgrade(msg) {
+  document.getElementById('upgrade-msg').textContent = msg;
+  document.getElementById('upgrade-box').classList.remove('hidden');
+}
+
+// Enter key submits
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('url-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') doSummarize(false);
+  });
+  document.getElementById('login-password').addEventListener('keydown', e => {
+    if (e.key === 'Enter') doLogin();
+  });
+  document.getElementById('register-password').addEventListener('keydown', e => {
+    if (e.key === 'Enter') doRegister();
+  });
+  document.getElementById('watchlist-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') addTicker();
+  });
+  init();
+});
+</script>
+</body>
+</html>
