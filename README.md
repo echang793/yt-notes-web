@@ -25,6 +25,8 @@ Live at: https://web-production-c271f.up.railway.app
 
 Payments via Stripe. Manage or cancel anytime from the Account tab.
 
+Anonymous visitors get 2 free summaries (tracked by cookie) before being prompted to create a free account.
+
 ---
 
 ## Tech stack
@@ -32,11 +34,28 @@ Payments via Stripe. Manage or cancel anytime from the Account tab.
 - **Backend**: FastAPI + Python 3.11
 - **AI**: Groq API (llama-3.3-70b-versatile)
 - **Transcripts**: Supadata API (handles YouTube's cloud IP restrictions)
-- **Auth**: bcrypt password hashing, httponly session cookies
+- **Auth**: bcrypt password hashing, httponly session cookies (30-day TTL)
 - **Payments**: Stripe Checkout + Customer Portal + webhooks
 - **Email alerts**: Resend
-- **Database**: SQLite
+- **Database**: SQLite at `data/summaries.db`
 - **Deployment**: Railway (auto-deploy from GitHub)
+
+---
+
+## Data & credentials
+
+All user data lives in a single SQLite file: **`data/summaries.db`**
+
+| Table | What's stored |
+|-------|--------------|
+| `users` | email, bcrypt-hashed password, plan, usage counts, Stripe customer ID |
+| `sessions` | random session tokens (httponly cookie) mapped to user IDs |
+| `summaries` | video URL, generated notes, ticker list, word count |
+| `watchlist` | tickers each Pro user is tracking |
+
+Passwords are hashed with bcrypt before being written — the plaintext password is never stored or logged anywhere.
+
+**Railway note**: Railway's filesystem is ephemeral — `data/summaries.db` resets on every redeploy. To persist user accounts across deploys, add a Railway Volume mounted at `/app/data`, or migrate to Postgres.
 
 ---
 
