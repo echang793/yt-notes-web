@@ -428,6 +428,12 @@ async function doSummarize(brief) {
       showUpgrade(data.detail || 'Limit reached. Upgrade to continue.');
       return;
     }
+    if (res.status === 401) {
+      openModal('register-modal');
+      document.getElementById('register-error').textContent = data.detail || '';
+      document.getElementById('register-error').classList.remove('hidden');
+      return;
+    }
     if (!res.ok) throw new Error(data.detail || 'Unknown error');
     showResult(data);
     // Refresh user usage counts

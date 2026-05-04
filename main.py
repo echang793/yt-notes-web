@@ -24,7 +24,9 @@ STATIC_DIR  = Path(__file__).parent / "static"
 CONFIG_PATH = Path.home() / ".yt-notes.json"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-SESSION_COOKIE = "yt_session"
+SESSION_COOKIE   = "yt_session"
+ANON_COOKIE      = "yt_anon"
+ANON_LIMIT       = 2
 
 
 def _get_api_key() -> str:
@@ -136,18 +138,28 @@ class SummarizeRequest(BaseModel):
 
 
 @app.post("/api/summarize")
-async def api_summarize(req: SummarizeRequest, request: Request):
+async def api_summarize(req: SummarizeRequest, request: Request, response: Response):
     user     = _current_user(request)
     api_key  = _get_api_key()
     video_id = summarizer.extract_video_id(req.url)
     if not video_id:
         raise HTTPException(400, f"Could not parse a video ID from: {req.url}")
 
-    # Enforce plan limits for logged-in users
     if user:
+        # Enforce plan limits for logged-in users
         allowed, reason = payments.can_summarize(user)
         if not allowed:
             raise HTTPException(402, reason)
+    else:
+        # Anonymous users get ANON_LIMIT free summaries tracked by cookie
+        try:
+            anon_count = int(request.cookies.get(ANON_COOKIE, "0"))
+        except ValueError:
+            anon_count = 0
+        if anon_count >= ANON_LIMIT:
+            raise HTTPException(401, "Create a free account to keep summarizing — it only takes 10 seconds.")
+        response.set_cookie(ANON_COOKIE, str(anon_count + 1),
+                            max_age=86400 * 30, httponly=True, samesite="lax")
 
     try:
         transcript, cached = await run_in_threadpool(
