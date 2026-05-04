@@ -1,14 +1,45 @@
-"""SQLite persistence layer."""
+"""SQLite / Turso persistence layer.
+
+Set TURSO_URL + TURSO_TOKEN env vars to use Turso (production).
+Falls back to local SQLite when those vars are absent (dev).
+"""
 
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 DB_PATH = Path(__file__).parent / "data" / "summaries.db"
+
+
+class _ConnWrapper:
+    """Wraps sqlite3 or libsql connection; auto-syncs to Turso on commit."""
+
+    def __init__(self, inner, is_turso: bool = False):
+        self._inner   = inner
+        self._turso   = is_turso
+
+    def __getattr__(self, name: str):
+        return getattr(self._inner, name)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type is None:
+            self._inner.commit()
+            if self._turso:
+                self._inner.sync()
+        else:
+            try:
+                self._inner.rollback()
+            except Exception:
+                pass
+        return False
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS summaries (
@@ -66,12 +97,29 @@ CREATE TABLE IF NOT EXISTS watchlist_alerts (
 """
 
 
-def _conn() -> sqlite3.Connection:
+def _conn() -> _ConnWrapper:
+    turso_url   = os.environ.get("TURSO_URL", "")
+    turso_token = os.environ.get("TURSO_TOKEN", "")
+
+    if turso_url and turso_token:
+        import libsql_experimental as libsql  # type: ignore
+        inner = libsql.connect(
+            "/tmp/nutshell.db",
+            sync_url=turso_url,
+            auth_token=turso_token,
+        )
+        inner.sync()
+        inner.row_factory = sqlite3.Row
+        inner.executescript(_SCHEMA)
+        inner.commit()
+        inner.sync()
+        return _ConnWrapper(inner, is_turso=True)
+
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    c = sqlite3.connect(str(DB_PATH))
-    c.row_factory = sqlite3.Row
-    c.executescript(_SCHEMA)
-    return c
+    inner = sqlite3.connect(str(DB_PATH))
+    inner.row_factory = sqlite3.Row
+    inner.executescript(_SCHEMA)
+    return _ConnWrapper(inner, is_turso=False)
 
 
 _MAX_SUMMARIES = 1000
