@@ -90,11 +90,15 @@ def extract_video_id(url: str) -> str | None:
 
 def _make_yt_api():
     import os
+    import ssl
     import requests
+    import urllib3
     from youtube_transcript_api import YouTubeTranscriptApi
     scraper_key = os.environ.get("SCRAPERAPI_KEY", "")
     if scraper_key:
         proxy_url = f"http://scraperapi:{scraper_key}@proxy-server.scraperapi.com:8001"
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        ssl._create_default_https_context = ssl._create_unverified_context
         session = requests.Session()
         session.proxies = {"http": proxy_url, "https": proxy_url}
         session.verify = False
