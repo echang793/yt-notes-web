@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -150,6 +151,7 @@ class _TursoConn:
 # ── Connection factory ─────────────────────────────────────────────────
 
 _turso: _TursoConn | None = None
+_turso_lock = threading.Lock()
 
 
 def _conn():
@@ -159,9 +161,12 @@ def _conn():
 
     if turso_url and turso_token:
         if _turso is None:
-            _turso = _TursoConn(turso_url, turso_token)
-            for stmt in _SCHEMA_STMTS:
-                _turso.execute(stmt)
+            with _turso_lock:
+                if _turso is None:   # double-checked locking
+                    conn = _TursoConn(turso_url, turso_token)
+                    for stmt in _SCHEMA_STMTS:
+                        conn.execute(stmt)
+                    _turso = conn
         return _turso
 
     # Local dev — plain SQLite

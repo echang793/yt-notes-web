@@ -55,6 +55,27 @@ def _require_user(request: Request) -> dict:
     return user
 
 
+# ── Health ────────────────────────────────────────────────────────────
+
+@app.get("/api/health")
+def api_health():
+    """Liveness + DB connectivity check. Returns real error message as JSON."""
+    try:
+        db._conn().execute("SELECT 1")
+        db_status = "ok"
+        db_error  = None
+    except Exception as exc:
+        db_status = "error"
+        db_error  = f"{type(exc).__name__}: {exc}"
+    return {
+        "status":    "ok" if db_error is None else "degraded",
+        "db":        db_status,
+        "db_error":  db_error,
+        "turso_url": bool(os.environ.get("TURSO_URL")),
+        "turso_tok": bool(os.environ.get("TURSO_TOKEN")),
+    }
+
+
 # ── Static ────────────────────────────────────────────────────────────
 
 @app.get("/")
