@@ -223,6 +223,16 @@ def get_history(limit: int = 50, user_id: str | None = None) -> list[dict]:
     return [_row_to_dict(r) for r in rows]
 
 
+def get_monthly_summary_count() -> int:
+    month_prefix = datetime.now().strftime("%Y-%m")
+    with _conn() as c:
+        row = c.execute(
+            "SELECT COUNT(*) AS n FROM summaries WHERE created_at >= ?",
+            (month_prefix + "-01",),
+        ).fetchone()
+    return int(row["n"]) if row else 0
+
+
 def get_ticker_tally() -> list[dict]:
     with _conn() as c:
         rows = c.execute("SELECT tickers FROM summaries").fetchall()

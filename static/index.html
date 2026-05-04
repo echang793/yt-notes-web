@@ -79,6 +79,11 @@
           <span id="word-count" class="text-xs text-slate-500 ml-auto hidden"></span>
         </div>
 
+        <!-- Supadata monthly quota -->
+        <div id="quota-line" class="mt-3 text-xs text-slate-600 hidden">
+          <span id="quota-text"></span>
+        </div>
+
         <!-- Usage bar for logged-in users -->
         <div id="usage-bar-wrap" class="mt-4 hidden">
           <div class="flex justify-between text-xs text-slate-500 mb-1">
@@ -335,6 +340,17 @@ async function init() {
     const res  = await fetch(`${API}/api/auth/me`);
     const data = await res.json();
     if (data.user) setUser(data.user);
+  } catch(_) {}
+
+  // Supadata quota
+  try {
+    const q = await fetch(`${API}/api/quota`).then(r => r.json());
+    const el = document.getElementById('quota-text');
+    const wrap = document.getElementById('quota-line');
+    const color = q.remaining <= 10 ? 'text-amber-500' : 'text-slate-600';
+    el.className = color;
+    el.textContent = `Transcript quota: ${q.remaining} of ${q.limit} remaining this month`;
+    wrap.classList.remove('hidden');
   } catch(_) {}
 
   // Deep-link to a summary

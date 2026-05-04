@@ -76,6 +76,14 @@ def api_health():
     }
 
 
+@app.get("/api/quota")
+def api_quota():
+    SUPADATA_LIMIT = 100
+    used      = db.get_monthly_summary_count()
+    remaining = max(0, SUPADATA_LIMIT - used)
+    return {"used": used, "limit": SUPADATA_LIMIT, "remaining": remaining}
+
+
 # ── Static ────────────────────────────────────────────────────────────
 
 @app.get("/")
