@@ -11,122 +11,167 @@ import os
 import sqlite3
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 DB_PATH = Path(__file__).parent / "data" / "summaries.db"
 
-
-class _ConnWrapper:
-    """Wraps sqlite3 or libsql connection; auto-syncs to Turso on commit."""
-
-    def __init__(self, inner, is_turso: bool = False):
-        self._inner   = inner
-        self._turso   = is_turso
-
-    def __getattr__(self, name: str):
-        return getattr(self._inner, name)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if exc_type is None:
-            self._inner.commit()
-            if self._turso:
-                self._inner.sync()
-        else:
-            try:
-                self._inner.rollback()
-            except Exception:
-                pass
-        return False
-
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS summaries (
-    id          TEXT    PRIMARY KEY,
-    video_id    TEXT    NOT NULL,
-    url         TEXT    NOT NULL,
-    title       TEXT    NOT NULL DEFAULT '',
-    notes       TEXT    NOT NULL,
-    brief       INTEGER NOT NULL DEFAULT 0,
-    word_count  INTEGER NOT NULL DEFAULT 0,
-    tickers     TEXT    NOT NULL DEFAULT '[]',
-    created_at  TEXT    NOT NULL,
-    user_id     TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_created ON summaries(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_video   ON summaries(video_id);
-CREATE INDEX IF NOT EXISTS idx_user    ON summaries(user_id);
-
-CREATE TABLE IF NOT EXISTS users (
-    id                  TEXT PRIMARY KEY,
-    email               TEXT NOT NULL UNIQUE,
-    password_hash       TEXT NOT NULL,
-    plan                TEXT NOT NULL DEFAULT 'free',
-    summary_count       INTEGER NOT NULL DEFAULT 0,
-    monthly_count       INTEGER NOT NULL DEFAULT 0,
-    stripe_customer_id  TEXT,
-    stripe_subscription_id TEXT,
-    created_at          TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_user_email    ON users(email);
-CREATE INDEX IF NOT EXISTS idx_user_stripe   ON users(stripe_customer_id);
-
-CREATE TABLE IF NOT EXISTS sessions (
-    token      TEXT PRIMARY KEY,
-    user_id    TEXT NOT NULL,
-    expires_at TEXT NOT NULL,
-    FOREIGN KEY (user_id) REFERENCES users(id)
-);
-CREATE INDEX IF NOT EXISTS idx_session_user ON sessions(user_id);
-
-CREATE TABLE IF NOT EXISTS watchlist (
-    user_id TEXT NOT NULL,
-    ticker  TEXT NOT NULL,
-    PRIMARY KEY (user_id, ticker),
-    FOREIGN KEY (user_id) REFERENCES users(id)
-);
-
-CREATE TABLE IF NOT EXISTS watchlist_alerts (
-    user_id    TEXT NOT NULL,
-    ticker     TEXT NOT NULL,
-    summary_id TEXT NOT NULL,
-    sent_at    TEXT NOT NULL,
-    PRIMARY KEY (user_id, ticker, summary_id)
-);
-"""
+_SCHEMA_STMTS = [
+    """CREATE TABLE IF NOT EXISTS summaries (
+        id          TEXT    PRIMARY KEY,
+        video_id    TEXT    NOT NULL,
+        url         TEXT    NOT NULL,
+        title       TEXT    NOT NULL DEFAULT '',
+        notes       TEXT    NOT NULL,
+        brief       INTEGER NOT NULL DEFAULT 0,
+        word_count  INTEGER NOT NULL DEFAULT 0,
+        tickers     TEXT    NOT NULL DEFAULT '[]',
+        created_at  TEXT    NOT NULL,
+        user_id     TEXT
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_created ON summaries(created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_video   ON summaries(video_id)",
+    "CREATE INDEX IF NOT EXISTS idx_user    ON summaries(user_id)",
+    """CREATE TABLE IF NOT EXISTS users (
+        id                     TEXT PRIMARY KEY,
+        email                  TEXT NOT NULL UNIQUE,
+        password_hash          TEXT NOT NULL,
+        plan                   TEXT NOT NULL DEFAULT 'free',
+        summary_count          INTEGER NOT NULL DEFAULT 0,
+        monthly_count          INTEGER NOT NULL DEFAULT 0,
+        stripe_customer_id     TEXT,
+        stripe_subscription_id TEXT,
+        created_at             TEXT NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_user_email  ON users(email)",
+    "CREATE INDEX IF NOT EXISTS idx_user_stripe ON users(stripe_customer_id)",
+    """CREATE TABLE IF NOT EXISTS sessions (
+        token      TEXT PRIMARY KEY,
+        user_id    TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        FOREIGN KEY (user_id) REFERENCES users(id)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_session_user ON sessions(user_id)",
+    """CREATE TABLE IF NOT EXISTS watchlist (
+        user_id TEXT NOT NULL,
+        ticker  TEXT NOT NULL,
+        PRIMARY KEY (user_id, ticker),
+        FOREIGN KEY (user_id) REFERENCES users(id)
+    )""",
+    """CREATE TABLE IF NOT EXISTS watchlist_alerts (
+        user_id    TEXT NOT NULL,
+        ticker     TEXT NOT NULL,
+        summary_id TEXT NOT NULL,
+        sent_at    TEXT NOT NULL,
+        PRIMARY KEY (user_id, ticker, summary_id)
+    )""",
+]
 
 
-def _apply_schema(conn) -> None:
-    for stmt in _SCHEMA.split(";"):
-        stmt = stmt.strip()
-        if stmt:
-            conn.execute(stmt)
-    conn.commit()
+# ── Turso HTTP client ──────────────────────────────────────────────────
+
+def _turso_arg(v):
+    if v is None:
+        return {"type": "null"}
+    if isinstance(v, bool):
+        return {"type": "integer", "value": "1" if v else "0"}
+    if isinstance(v, int):
+        return {"type": "integer", "value": str(v)}
+    if isinstance(v, float):
+        return {"type": "float", "value": str(v)}
+    return {"type": "text", "value": str(v)}
 
 
-def _conn() -> _ConnWrapper:
+def _turso_val(v: dict):
+    t = v.get("type", "null")
+    if t == "null":
+        return None
+    if t == "integer":
+        return int(v["value"])
+    if t == "float":
+        return float(v["value"])
+    return v.get("value")
+
+
+class _TursoRow(dict):
+    """dict subclass that supports row["col"] access, compatible with sqlite3.Row."""
+    pass
+
+
+class _TursoCursor:
+    def __init__(self, cols: list[str], rows: list):
+        self._rows = [
+            _TursoRow(zip(cols, [_turso_val(v) for v in row]))
+            for row in rows
+        ]
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+    def fetchall(self):
+        return self._rows
+
+
+class _TursoConn:
+    """Pure-HTTP Turso client. No native compilation required."""
+
+    def __init__(self, url: str, token: str):
+        import requests as _req
+        self._sess  = _req.Session()
+        self._sess.headers.update({
+            "Authorization": f"Bearer {token}",
+            "Content-Type":  "application/json",
+        })
+        self._url = url.replace("libsql://", "https://") + "/v2/pipeline"
+
+    def execute(self, sql: str, params=()):
+        body = {"requests": [
+            {"type": "execute", "stmt": {
+                "sql":  sql,
+                "args": [_turso_arg(p) for p in params],
+            }},
+            {"type": "close"},
+        ]}
+        r = self._sess.post(self._url, json=body, timeout=15)
+        r.raise_for_status()
+        data   = r.json()
+        result = data["results"][0]
+        if result.get("type") == "error":
+            raise Exception(result.get("error", {}).get("message", "Turso error"))
+        res    = result.get("response", {}).get("result", {})
+        cols   = [c["name"] for c in res.get("cols", [])]
+        rows   = res.get("rows", [])
+        return _TursoCursor(cols, rows)
+
+    def commit(self):   pass   # HTTP API is auto-commit per request
+    def rollback(self): pass
+    def __enter__(self):        return self
+    def __exit__(self, *args):  return False
+
+
+# ── Connection factory ─────────────────────────────────────────────────
+
+_turso: _TursoConn | None = None
+
+
+def _conn():
+    global _turso
     turso_url   = os.environ.get("TURSO_URL", "")
     turso_token = os.environ.get("TURSO_TOKEN", "")
 
     if turso_url and turso_token:
-        import libsql_experimental as libsql  # type: ignore
-        inner = libsql.connect(
-            "/tmp/nutshell.db",
-            sync_url=turso_url,
-            auth_token=turso_token,
-        )
-        inner.sync()
-        inner.row_factory = sqlite3.Row
-        _apply_schema(inner)
-        inner.sync()
-        return _ConnWrapper(inner, is_turso=True)
+        if _turso is None:
+            _turso = _TursoConn(turso_url, turso_token)
+            for stmt in _SCHEMA_STMTS:
+                _turso.execute(stmt)
+        return _turso
 
+    # Local dev — plain SQLite
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     inner = sqlite3.connect(str(DB_PATH))
     inner.row_factory = sqlite3.Row
-    inner.executescript(_SCHEMA)
-    return _ConnWrapper(inner, is_turso=False)
+    for stmt in _SCHEMA_STMTS:
+        inner.execute(stmt)
+    inner.commit()
+    return inner
 
 
 _MAX_SUMMARIES = 1000
@@ -179,14 +224,14 @@ def get_ticker_tally() -> list[dict]:
 
     tally: dict[str, dict] = {}
     for row in rows:
-        for t in json.loads(row["tickers"]):
+        for t in json.loads(row["tickers"] or "[]"):
             ticker = t["ticker"]
             sent   = t.get("sentiment", "neutral")
             if ticker not in tally:
                 tally[ticker] = {"ticker": ticker, "count": 0,
                                  "bullish": 0, "bearish": 0, "neutral": 0}
-            tally[ticker]["count"]  += 1
-            tally[ticker][sent]     += 1
+            tally[ticker]["count"] += 1
+            tally[ticker][sent]    += 1
 
     return sorted(tally.values(), key=lambda x: x["count"], reverse=True)
 
@@ -297,7 +342,6 @@ def remove_from_watchlist(user_id: str, ticker: str) -> None:
 
 
 def get_watchers_for_tickers(tickers: list[str]) -> list[dict]:
-    """Return [{user_id, ticker}] for pro users watching any of these tickers."""
     if not tickers:
         return []
     placeholders = ",".join("?" * len(tickers))
@@ -328,8 +372,8 @@ def record_alert_sent(user_id: str, ticker: str, summary_id: str) -> None:
         )
 
 
-def _row_to_dict(row: sqlite3.Row) -> dict:
+def _row_to_dict(row) -> dict:
     d = dict(row)
-    d["tickers"] = json.loads(d.get("tickers", "[]"))
-    d["brief"]   = bool(d["brief"])
+    d["tickers"] = json.loads(d.get("tickers") or "[]")
+    d["brief"]   = bool(d.get("brief", 0))
     return d
