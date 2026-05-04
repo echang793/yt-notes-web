@@ -97,6 +97,14 @@ CREATE TABLE IF NOT EXISTS watchlist_alerts (
 """
 
 
+def _apply_schema(conn) -> None:
+    for stmt in _SCHEMA.split(";"):
+        stmt = stmt.strip()
+        if stmt:
+            conn.execute(stmt)
+    conn.commit()
+
+
 def _conn() -> _ConnWrapper:
     turso_url   = os.environ.get("TURSO_URL", "")
     turso_token = os.environ.get("TURSO_TOKEN", "")
@@ -110,8 +118,7 @@ def _conn() -> _ConnWrapper:
         )
         inner.sync()
         inner.row_factory = sqlite3.Row
-        inner.executescript(_SCHEMA)
-        inner.commit()
+        _apply_schema(inner)
         inner.sync()
         return _ConnWrapper(inner, is_turso=True)
 
