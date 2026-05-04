@@ -121,7 +121,7 @@ class _TursoConn:
             "Authorization": f"Bearer {token}",
             "Content-Type":  "application/json",
         })
-        self._url = url.replace("libsql://", "https://") + "/v2/pipeline"
+        self._url = url.strip().replace("libsql://", "https://") + "/v2/pipeline"
 
     def execute(self, sql: str, params=()):
         body = {"requests": [
@@ -156,8 +156,8 @@ _turso_lock = threading.Lock()
 
 def _conn():
     global _turso
-    turso_url   = os.environ.get("TURSO_URL", "")
-    turso_token = os.environ.get("TURSO_TOKEN", "")
+    turso_url   = os.environ.get("TURSO_URL", "").strip()
+    turso_token = os.environ.get("TURSO_TOKEN", "").strip()
 
     if turso_url and turso_token:
         if _turso is None:
