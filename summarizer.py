@@ -88,6 +88,16 @@ def extract_video_id(url: str) -> str | None:
     return match.group(1) if match else None
 
 
+def _make_yt_api():
+    import os
+    from youtube_transcript_api import YouTubeTranscriptApi
+    scraper_key = os.environ.get("SCRAPERAPI_KEY", "")
+    if scraper_key:
+        proxy_url = f"http://scraperapi:{scraper_key}@proxy-server.scraperapi.com:8001"
+        return YouTubeTranscriptApi(proxies={"http": proxy_url, "https": proxy_url})
+    return YouTubeTranscriptApi()
+
+
 def fetch_transcript(video_id: str, api_key: str, model: str = GROQ_MODEL) -> tuple[str, bool]:
     """Return (transcript_text, from_cache)."""
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -95,12 +105,10 @@ def fetch_transcript(video_id: str, api_key: str, model: str = GROQ_MODEL) -> tu
     if cache.exists():
         return cache.read_text(), True
 
-    from youtube_transcript_api import YouTubeTranscriptApi
-
-    api        = YouTubeTranscriptApi()
+    api        = _make_yt_api()
     translated = False
     try:
-        tlist      = api.list(video_id)
+        tlist = api.list(video_id)
         transcript = tlist.find_transcript(["en", "en-US", "en-GB"])
         segments   = transcript.fetch()
     except Exception:
