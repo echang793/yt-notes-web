@@ -88,35 +88,48 @@ def extract_video_id(url: str) -> str | None:
     return match.group(1) if match else None
 
 
-def _make_yt_api():
-    import os
-    import ssl
-    import requests
-    import urllib3
-    from youtube_transcript_api import YouTubeTranscriptApi
-    scraper_key = os.environ.get("SCRAPERAPI_KEY", "")
-    if scraper_key:
-        proxy_url = f"http://scraperapi:{scraper_key}@proxy-server.scraperapi.com:8001"
-        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        ssl._create_default_https_context = ssl._create_unverified_context
-        session = requests.Session()
-        session.proxies = {"http": proxy_url, "https": proxy_url}
-        session.verify = False
-        return YouTubeTranscriptApi(http_client=session)
-    return YouTubeTranscriptApi()
-
-
 def fetch_transcript(video_id: str, api_key: str, model: str = GROQ_MODEL) -> tuple[str, bool]:
     """Return (transcript_text, from_cache)."""
+    import os
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     cache = CACHE_DIR / f"{video_id}.txt"
     if cache.exists():
         return cache.read_text(), True
 
-    api        = _make_yt_api()
+    supadata_key = os.environ.get("SUPADATA_API_KEY", "")
+    if supadata_key:
+        text = _fetch_via_supadata(video_id, supadata_key)
+    else:
+        text = _fetch_via_yt_api(video_id, api_key, model)
+
+    cache.write_text(text)
+    return text, False
+
+
+def _fetch_via_supadata(video_id: str, supadata_key: str) -> str:
+    import requests
+    resp = requests.get(
+        "https://api.supadata.ai/v1/youtube/transcript",
+        params={"videoId": video_id, "text": "true"},
+        headers={"x-api-key": supadata_key},
+        timeout=30,
+    )
+    if not resp.ok:
+        raise ValueError(f"Supadata error {resp.status_code}: {resp.text[:200]}")
+    data = resp.json()
+    text = data.get("content") or data.get("text") or ""
+    if not text:
+        raise ValueError("Supadata returned an empty transcript.")
+    text = re.sub(r"\[.*?\]", "", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _fetch_via_yt_api(video_id: str, api_key: str, model: str) -> str:
+    from youtube_transcript_api import YouTubeTranscriptApi
+    api        = YouTubeTranscriptApi()
     translated = False
     try:
-        tlist = api.list(video_id)
+        tlist      = api.list(video_id)
         transcript = tlist.find_transcript(["en", "en-US", "en-GB"])
         segments   = transcript.fetch()
     except Exception:
@@ -140,9 +153,7 @@ def fetch_transcript(video_id: str, api_key: str, model: str = GROQ_MODEL) -> tu
     if translated:
         text = _call_groq(_TRANSLATE_PROMPT.format(transcript=text[:60_000]),
                           api_key, model, max_tokens=4096)
-
-    cache.write_text(text)
-    return text, False
+    return text
 
 
 def _call_groq(prompt: str, api_key: str, model: str, max_tokens: int = 2048,
