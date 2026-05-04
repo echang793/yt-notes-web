@@ -153,7 +153,7 @@ async def api_summarize(req: SummarizeRequest, request: Request):
         transcript, cached = await run_in_threadpool(
             summarizer.fetch_transcript, video_id, api_key, req.model
         )
-    except ValueError as e:
+    except Exception as e:
         raise HTTPException(400, str(e))
 
     word_count = len(transcript.split())
